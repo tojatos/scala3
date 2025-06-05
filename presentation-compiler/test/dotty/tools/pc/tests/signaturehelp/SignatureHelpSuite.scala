@@ -6,6 +6,25 @@ import org.junit.{ Ignore, Test }
 
 class SignatureHelpSuite extends BaseSignatureHelpSuite:
 
+  @Test def `selectable` =
+    check(
+      """
+        |object a {
+        |  val obj: reflect.Selectable {
+        |    def method(x: Int, y: String): Unit
+        |  } = new reflect.Selectable {
+        |    def method(x: Int, y: String): Unit = ()
+        |  }
+        |  obj.method(1@@, "one")
+        |}
+      """.stripMargin,
+      """|method(x: Int, y: String): Unit
+         |       ^^^^^^
+         |method(x: Int, y: String): Unit
+         |       ^^^^^^
+         |""".stripMargin
+    )
+
   @Test def `method` =
     check(
       """

@@ -4,6 +4,7 @@ package util
 import dotty.tools.dotc.ast.NavigateAST
 import dotty.tools.dotc.ast.Positioned
 import dotty.tools.dotc.ast.untpd
+import dotty.tools.dotc.core.Constants.*
 import dotty.tools.dotc.core.NameOps.*
 import dotty.tools.dotc.core.StdNames.nme
 import dotty.tools.dotc.core.Symbols.defn
@@ -98,16 +99,53 @@ object Signatures {
    */
   def computeSignatureHelp(path: List[tpd.Tree], span: Span)(using Context): (Int, Int, List[Signature]) =
     findEnclosingApply(path, span) match
-      case Apply(fun, params) => applyCallInfo(span, params, fun, false)
-      case UnApply(fun, _, patterns) => unapplyCallInfo(span, fun, patterns)
-      case appliedTypeTree @ AppliedTypeTree(_, types) => appliedTypeTreeCallInfo(span, appliedTypeTree, types)
-      case tp @ TypeApply(fun, types) => applyCallInfo(span, types, fun, isTypeApply = true)
+      case apply @ Apply(Apply(
+            select @ Select(sel, n),
+            Literal(Constant(name: String))::_
+          ), params) :: rest if n == nme.selectDynamic || n == nme.applyDynamic =>
+        // println(s"apply: ${apply.span} contains ${span}? ${apply.span.contains(span)}")
+
+        def findRefinement(tp: Type): Option[Type] =
+          tp match
+            case RefinedType(_, refName, tpe) if (name == refName.toString() || refName.toString() == nme.Fields.toString()) =>
+              val resultType =
+                rest match
+                  case Select(_, asInstanceOf) :: TypeApply(_, List(tpe)) :: _ if asInstanceOf == nme.asInstanceOfPM =>
+                    tpe.tpe.widenTermRefExpr.dealias
+                  case _ if n == nme.selectDynamic => tpe.resultType
+                  case _ => tpe
+              Some(resultType)
+
+            case RefinedType(parent, _, _) =>
+              findRefinement(parent)
+            case _ => None
+
+        val refTpe = sel.typeOpt.widen.dealias match
+          case r: RefinedType => Some(r)
+          case t: (TermRef | TypeProxy) => Some(t.termSymbol.info.dealias)
+          case _ => None
+
+        val resultType = findRefinement(refTpe.get)
+
+        println(s"--------------------------------")
+        // println(s"apply: ${apply.show}")
+        // println(s"apply tpe: ${apply.tpe}")
+        println(s"select tpe: ${select.tpe}")
+        println(s"ref tpe: ${refTpe}")
+        println(s"resultType: ${resultType}")
+        println(s"--------------------------------")
+        applyCallInfo(span, params, select, false)
+      case Apply(fun, params) :: _ => applyCallInfo(span, params, fun, false)
+      case UnApply(fun, _, patterns) :: _ => unapplyCallInfo(span, fun, patterns)
+      case (appliedTypeTree @ AppliedTypeTree(_, types)) :: _ => appliedTypeTreeCallInfo(span, appliedTypeTree, types)
+      case tp @ TypeApply(fun, types) :: _ => applyCallInfo(span, types, fun, isTypeApply = true)
       case _ => (0, 0, Nil)
 
 
   def isEnclosingApply(tree: tpd.Tree, span: Span)(using Context): Boolean =
     tree match
-      case apply @ Apply(fun, _) => !fun.span.contains(span) && isValid(apply)
+      case apply @ Apply(fun, _) =>
+        !fun.span.contains(span) && isValid(apply)
       case unapply @ UnApply(fun, _, _) =>
         !fun.span.contains(span) && !ctx.definitions.isFunctionNType(tree.tpe) // we want to show tuples in unapply
       case typeTree @ AppliedTypeTree(fun, _) => !fun.span.contains(span) && isValid(typeTree)
@@ -125,8 +163,10 @@ object Signatures {
    *         In case if cursor is pointing on closing parenthesis and
    *         next subsequent application exists, it returns the latter
    */
-  private def findEnclosingApply(path: List[tpd.Tree], span: Span)(using Context): tpd.Tree =
+  private def findEnclosingApply(path: List[tpd.Tree], span: Span)(using Context): List[tpd.Tree] =
     import tpd.TreeOps
+
+    // println(s"path: ${path.take(4).mkString("\n\n")}")
 
     val filteredPath = path.filter:
       case block @ Block(stats, expr) =>
@@ -134,7 +174,7 @@ object Signatures {
       case other => isEnclosingApply(other, span)
 
     filteredPath match
-      case Nil => tpd.EmptyTree
+      case Nil => tpd.EmptyTree :: Nil
       case tpd.Block(stats, expr) :: _ => // potential block containing lifted args
 
         val enclosingFunction = stats.collectFirst:
@@ -143,7 +183,7 @@ object Signatures {
         val enclosingTree = enclosingFunction.getOrElse(expr)
         findEnclosingApply(Interactive.pathTo(enclosingTree, span), span)
 
-      case direct :: _ => direct
+      case direct :: rest => direct :: rest
 
 
   private def isClosingSymbol(ch: Char) = ch == ')' || ch == ']'

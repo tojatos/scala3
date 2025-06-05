@@ -36,6 +36,8 @@ object SignatureHelpProvider:
         val pos = driver.sourcePosition(params, isZeroExtent = false)
         val path = Interactive.pathTo(unit.tpdTree, pos.span)(using driver.currentCtx)
 
+        println(s"path: ${path.take(4)}")
+
         val localizedContext = Interactive.contextOfPath(path)(using driver.currentCtx)
         val indexedContext = IndexedContext(pos)(using driver.currentCtx)
 
